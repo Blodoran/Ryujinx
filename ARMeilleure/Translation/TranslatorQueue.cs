@@ -1,4 +1,5 @@
-﻿using ARMeilleure.State;
+﻿using ARMeilleure.Diagnostics.EventSources;
+using ARMeilleure.State;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -53,6 +54,8 @@ namespace ARMeilleure.Translation
                 {
                     _requests.Push(new RejitRequest(address, mode));
                     _notEmptyEvent.Set();
+
+                    TranslatorEventSource.Log.RejitQueueAdd(1);
                 }
             }
         }
@@ -75,6 +78,8 @@ namespace ARMeilleure.Translation
                     {
                         _requestAddresses.Remove(result.Address);
 
+                        TranslatorEventSource.Log.RejitQueueAdd(-1);
+
                         return true;
                     }
                     else if (!_disposed)
@@ -96,6 +101,8 @@ namespace ARMeilleure.Translation
         {
             lock (Sync)
             {
+                TranslatorEventSource.Log.RejitQueueAdd(-_requests.Count);
+
                 _requests.Clear();
                 _requestAddresses.Clear();
             }
