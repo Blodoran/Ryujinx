@@ -480,7 +480,7 @@ namespace ARMeilleure.Translation
             {
                 lock (Queue.Sync)
                 {
-                    while (Queue.TryDequeue(out RejitRequest request))
+                    while (Queue.Count > 0 && Queue.TryDequeue(out RejitRequest request))
                     {
                         if (Functions.TryGetValue(request.Address, out var func) && func.CallCounter != null)
                         {
