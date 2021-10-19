@@ -16,7 +16,7 @@ namespace ARMeilleure.Translation
         private bool _disposed;
         private readonly Stack<RejitRequest> _requests;
         private readonly HashSet<ulong> _requestAddresses;
-        private readonly ManualResetEvent _notEmptyEvent;
+        private readonly ManualResetEventSlim _notEmptyEvent;
 
         /// <summary>
         /// Gets the object used to synchronize access to the <see cref="TranslatorQueue"/>.
@@ -29,7 +29,7 @@ namespace ARMeilleure.Translation
         public int Count => _requests.Count;
 
         /// <summary>
-        /// Constructs a new instance of the <see cref="TranslatorQueue"/> class.
+        /// Initializes a new instance of the <see cref="TranslatorQueue"/> class.
         /// </summary>
         public TranslatorQueue()
         {
@@ -37,7 +37,7 @@ namespace ARMeilleure.Translation
 
             _requests = new Stack<RejitRequest>();
             _requestAddresses = new HashSet<ulong>();
-            _notEmptyEvent = new ManualResetEvent(false);
+            _notEmptyEvent = new ManualResetEventSlim(false);
         }
 
         /// <summary>
@@ -58,14 +58,17 @@ namespace ARMeilleure.Translation
         }
 
         /// <summary>
-        /// Tries to dequeue a <see cref="RejitRequest"/>
+        /// Tries to dequeue a <see cref="RejitRequest"/>. This will block the thread until a <see cref="RejitRequest"/>
+        /// is enqueued or the <see cref="TranslatorQueue"/> is disposed.
         /// </summary>
         /// <param name="result"><see cref="RejitRequest"/> dequeued</param>
         /// <returns><see langword="true"/> on success; otherwise <see langword="false"/></returns>
         public bool TryDequeue(out RejitRequest result)
         {
-            while (!_disposed && _notEmptyEvent.WaitOne())
+            while (!_disposed)
             {
+                _notEmptyEvent.Wait();
+
                 lock (Sync)
                 {
                     if (_requests.TryPop(out result))
@@ -74,7 +77,7 @@ namespace ARMeilleure.Translation
 
                         return true;
                     }
-                    else
+                    else if (!_disposed)
                     {
                         _notEmptyEvent.Reset();
                     }
@@ -94,6 +97,7 @@ namespace ARMeilleure.Translation
             lock (Sync)
             {
                 _requests.Clear();
+                _requestAddresses.Clear();
             }
         }
 
@@ -104,9 +108,17 @@ namespace ARMeilleure.Translation
         {
             if (!_disposed)
             {
-                _notEmptyEvent.Dispose();
-
                 _disposed = true;
+
+                lock (Sync)
+                {
+                    Clear();
+
+                    // Unblock threads and allow them to exit `TryDequeue`.
+                    _notEmptyEvent.Set();
+
+                    // _notEmptyEvent.Dispose() is intentionally not called to simplify `TryDequeue`.
+                }
             }
         }
     }
