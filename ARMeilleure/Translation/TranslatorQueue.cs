@@ -17,6 +17,7 @@ namespace ARMeilleure.Translation
         private bool _disposed;
         private readonly Stack<RejitRequest> _requests;
         private readonly HashSet<ulong> _requestAddresses;
+        private readonly CountdownEvent _threadCountdownEvent;
         private readonly ManualResetEventSlim _notEmptyEvent;
 
         /// <summary>
@@ -39,6 +40,11 @@ namespace ARMeilleure.Translation
             _requests = new Stack<RejitRequest>();
             _requestAddresses = new HashSet<ulong>();
             _notEmptyEvent = new ManualResetEventSlim(false);
+
+            // This event counts the number of threads in `TryDequeue`. By making the initial count 1, we make it
+            // impossible for the event to be set unless we call an extra `Signal()` on it (because we cannot have -1
+            // thread).
+            _threadCountdownEvent = new CountdownEvent(1);
         }
 
         /// <summary>
@@ -68,6 +74,8 @@ namespace ARMeilleure.Translation
         /// <returns><see langword="true"/> on success; otherwise <see langword="false"/></returns>
         public bool TryDequeue(out RejitRequest result)
         {
+            _threadCountdownEvent.AddCount();
+
             while (!_disposed)
             {
                 _notEmptyEvent.Wait();
@@ -80,6 +88,8 @@ namespace ARMeilleure.Translation
 
                         TranslatorEventSource.Log.RejitQueueAdd(-1);
 
+                        _threadCountdownEvent.Signal();
+
                         return true;
                     }
                     else if (!_disposed)
@@ -90,6 +100,8 @@ namespace ARMeilleure.Translation
             }
 
             result = default;
+
+            _threadCountdownEvent.Signal();
 
             return false;
         }
@@ -121,11 +133,17 @@ namespace ARMeilleure.Translation
                 {
                     Clear();
 
-                    // Unblock threads and allow them to exit `TryDequeue`.
+                    // Unblock threads and allow them to exit `TryDequeue`. This is inside the lock to ensure that a
+                    // reset on the event does not happen after this.
                     _notEmptyEvent.Set();
-
-                    // _notEmptyEvent.Dispose() is intentionally not called to simplify `TryDequeue`.
                 }
+
+                // Wait for all threads to exit `TryDequeue` before disposing the event.
+                _threadCountdownEvent.Signal();
+                _threadCountdownEvent.Wait();
+
+                _threadCountdownEvent.Dispose();
+                _notEmptyEvent.Dispose();
             }
         }
     }
