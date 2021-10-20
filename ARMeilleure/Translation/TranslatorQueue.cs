@@ -15,9 +15,9 @@ namespace ARMeilleure.Translation
     sealed class TranslatorQueue : IDisposable
     {
         private bool _disposed;
+        private int _threadCount;
         private readonly Stack<RejitRequest> _requests;
         private readonly HashSet<ulong> _requestAddresses;
-        private readonly CountdownEvent _threadCountdownEvent;
         private readonly ManualResetEventSlim _notEmptyEvent;
 
         /// <summary>
@@ -40,11 +40,6 @@ namespace ARMeilleure.Translation
             _requests = new Stack<RejitRequest>();
             _requestAddresses = new HashSet<ulong>();
             _notEmptyEvent = new ManualResetEventSlim(false);
-
-            // This event counts the number of threads in `TryDequeue`. By making the initial count 1, we make it
-            // impossible for the event to be set unless we call an extra `Signal()` on it (because we cannot have -1
-            // thread).
-            _threadCountdownEvent = new CountdownEvent(1);
         }
 
         /// <summary>
@@ -74,7 +69,7 @@ namespace ARMeilleure.Translation
         /// <returns><see langword="true"/> on success; otherwise <see langword="false"/></returns>
         public bool TryDequeue(out RejitRequest result)
         {
-            _threadCountdownEvent.AddCount();
+            Interlocked.Increment(ref _threadCount);
 
             while (!_disposed)
             {
@@ -88,7 +83,7 @@ namespace ARMeilleure.Translation
 
                         TranslatorEventSource.Log.RejitQueueAdd(-1);
 
-                        _threadCountdownEvent.Signal();
+                        Interlocked.Decrement(ref _threadCount);
 
                         return true;
                     }
@@ -101,7 +96,7 @@ namespace ARMeilleure.Translation
 
             result = default;
 
-            _threadCountdownEvent.Signal();
+            Interlocked.Decrement(ref _threadCount);
 
             return false;
         }
@@ -138,11 +133,13 @@ namespace ARMeilleure.Translation
                     _notEmptyEvent.Set();
                 }
 
-                // Wait for all threads to exit `TryDequeue` before disposing the event.
-                _threadCountdownEvent.Signal();
-                _threadCountdownEvent.Wait();
+                SpinWait spin = new();
 
-                _threadCountdownEvent.Dispose();
+                while (_threadCount != 0)
+                {
+                    spin.SpinOnce();
+                }
+
                 _notEmptyEvent.Dispose();
             }
         }
